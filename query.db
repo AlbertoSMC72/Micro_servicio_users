@@ -1,0 +1,622 @@
+-- =====================================================
+-- 1. USER SERVICE DATABASE
+-- =====================================================
+CREATE DATABASE user_service;
+USE user_service;
+
+CREATE TABLE users (
+    id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password VARCHAR(255) NOT NULL,
+    first_name VARCHAR(100) NOT NULL,
+    last_name VARCHAR(100) NOT NULL,
+    phone VARCHAR(20),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE user_addresses (
+    id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
+    user_id VARCHAR(36) NOT NULL,
+    street VARCHAR(255) NOT NULL,
+    city VARCHAR(100) NOT NULL,
+    state VARCHAR(100) NOT NULL,
+    postal_code VARCHAR(10) NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE TABLE password_reset_tokens (
+    id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
+    user_id VARCHAR(36) NOT NULL,
+    token VARCHAR(255) NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    used BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    INDEX idx_token (token),
+    INDEX idx_expires (expires_at)
+);
+
+
+-- PROCEDIMIENTOS PARA USER SERVICE
+
+-- Registrar nuevo usuario
+DELIMITER //
+CREATE PROCEDURE RegisterUser(
+    IN p_email VARCHAR(255),
+    IN p_password VARCHAR(255),
+    IN p_first_name VARCHAR(100),
+    IN p_last_name VARCHAR(100),
+    IN p_phone VARCHAR(20)
+)
+BEGIN
+    DECLARE user_exists INT DEFAULT 0;
+    DECLARE new_user_id VARCHAR(36);
+    
+    -- Verificar si el email ya existe
+    SELECT COUNT(*) INTO user_exists FROM users WHERE email = p_email;
+    
+    IF user_exists > 0 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Email ya está registrado';
+    ELSE
+        SET new_user_id = UUID();
+        INSERT INTO users (id, email, password, first_name, last_name, phone)
+        VALUES (new_user_id, p_email, p_password, p_first_name, p_last_name, p_phone);
+        
+        SELECT new_user_id as user_id, 'Usuario registrado exitosamente' as message;
+    END IF;
+END //
+DELIMITER ;
+
+-- Autenticar usuario
+DELIMITER //
+CREATE PROCEDURE AuthenticateUser(
+    IN p_email VARCHAR(255),
+    IN p_password VARCHAR(255)
+)
+BEGIN
+    SELECT id, email, first_name, last_name, phone
+    FROM users 
+    WHERE email = p_email AND password = p_password;
+END //
+DELIMITER ;
+
+-- Obtener perfil completo del usuario
+DELIMITER //
+CREATE PROCEDURE GetUserProfile(IN p_user_id VARCHAR(36))
+BEGIN
+    SELECT 
+        u.id, u.email, u.first_name, u.last_name, u.phone, u.created_at,
+        a.id as address_id, a.street, a.city, a.state, a.postal_code
+    FROM users u
+    LEFT JOIN user_addresses a ON u.id = a.user_id
+    WHERE u.id = p_user_id;
+END //
+DELIMITER ;
+
+-- Agregar dirección a usuario
+DELIMITER //
+CREATE PROCEDURE AddUserAddress(
+    IN p_user_id VARCHAR(36),
+    IN p_street VARCHAR(255),
+    IN p_city VARCHAR(100),
+    IN p_state VARCHAR(100),
+    IN p_postal_code VARCHAR(10)
+)
+BEGIN
+    DECLARE new_address_id VARCHAR(36);
+    SET new_address_id = UUID();
+    
+    INSERT INTO user_addresses (id, user_id, street, city, state, postal_code)
+    VALUES (new_address_id, p_user_id, p_street, p_city, p_state, p_postal_code);
+    
+    SELECT new_address_id as address_id, 'Dirección agregada exitosamente' as message;
+END //
+DELIMITER ;
+
+-- =====================================================
+-- 2. PRODUCT SERVICE DATABASE
+-- =====================================================
+CREATE DATABASE product_service;
+USE product_service;
+
+CREATE TABLE categories (
+    id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
+    name VARCHAR(100) NOT NULL,
+    description TEXT
+);
+
+CREATE TABLE products (
+    id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    price DECIMAL(10,2) NOT NULL,
+    category_id VARCHAR(36),
+    stock INT DEFAULT 0,
+    active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (category_id) REFERENCES categories(id)
+);
+
+-- PROCEDIMIENTOS PARA PRODUCT SERVICE
+
+-- Buscar productos
+DELIMITER //
+CREATE PROCEDURE SearchProducts(
+    IN p_search_term VARCHAR(255),
+    IN p_category_id VARCHAR(36),
+    IN p_limit INT,
+    IN p_offset INT
+)
+BEGIN
+    SELECT p.id, p.name, p.description, p.price, p.stock, 
+           c.name as category_name
+    FROM products p
+    LEFT JOIN categories c ON p.category_id = c.id
+    WHERE p.active = TRUE
+    AND (p_search_term IS NULL OR p.name LIKE CONCAT('%', p_search_term, '%'))
+    AND (p_category_id IS NULL OR p.category_id = p_category_id)
+    ORDER BY p.name
+    LIMIT p_limit OFFSET p_offset;
+END //
+DELIMITER ;
+
+-- Verificar y reservar stock
+DELIMITER //
+CREATE PROCEDURE ReserveStock(
+    IN p_product_id VARCHAR(36),
+    IN p_quantity INT
+)
+BEGIN
+    DECLARE current_stock INT;
+    
+    -- Verificar stock disponible
+    SELECT stock INTO current_stock FROM products WHERE id = p_product_id;
+    
+    IF current_stock >= p_quantity THEN
+        UPDATE products 
+        SET stock = stock - p_quantity 
+        WHERE id = p_product_id;
+        
+        SELECT 'Stock reservado exitosamente' as message, current_stock - p_quantity as remaining_stock;
+    ELSE
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Stock insuficiente';
+    END IF;
+END //
+DELIMITER ;
+
+-- Liberar stock (si se cancela una orden)
+DELIMITER //
+CREATE PROCEDURE ReleaseStock(
+    IN p_product_id VARCHAR(36),
+    IN p_quantity INT
+)
+BEGIN
+    UPDATE products 
+    SET stock = stock + p_quantity 
+    WHERE id = p_product_id;
+    
+    SELECT 'Stock liberado exitosamente' as message;
+END //
+DELIMITER ;
+
+-- Obtener productos con stock bajo
+DELIMITER //
+CREATE PROCEDURE GetLowStockProducts(IN p_threshold INT)
+BEGIN
+    SELECT p.id, p.name, p.stock, c.name as category_name
+    FROM products p
+    LEFT JOIN categories c ON p.category_id = c.id
+    WHERE p.stock <= p_threshold AND p.active = TRUE
+    ORDER BY p.stock ASC;
+END //
+DELIMITER ;
+
+-- Obtener producto por ID
+DELIMITER //
+CREATE PROCEDURE GetProductById(IN p_product_id VARCHAR(36))
+BEGIN
+    SELECT p.id, p.name, p.description, p.price, p.stock, p.active,
+           c.name as category_name
+    FROM products p
+    LEFT JOIN categories c ON p.category_id = c.id
+    WHERE p.id = p_product_id;
+END //
+DELIMITER ;
+
+-- =====================================================
+-- 3. CART SERVICE DATABASE
+-- =====================================================
+CREATE DATABASE cart_service;
+USE cart_service;
+
+CREATE TABLE carts (
+    id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
+    user_id VARCHAR(36) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE cart_items (
+    id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
+    cart_id VARCHAR(36) NOT NULL,
+    product_id VARCHAR(36) NOT NULL,
+    quantity INT NOT NULL DEFAULT 1,
+    price DECIMAL(10,2) NOT NULL,
+    product_name VARCHAR(255), -- denormalizado
+    FOREIGN KEY (cart_id) REFERENCES carts(id)
+);
+
+-- PROCEDIMIENTOS PARA CART SERVICE
+
+-- Obtener o crear carrito
+DELIMITER //
+CREATE PROCEDURE GetOrCreateCart(IN p_user_id VARCHAR(36))
+BEGIN
+    DECLARE cart_id VARCHAR(36);
+    
+    -- Buscar carrito existente
+    SELECT id INTO cart_id FROM carts WHERE user_id = p_user_id LIMIT 1;
+    
+    -- Si no existe, crear uno nuevo
+    IF cart_id IS NULL THEN
+        SET cart_id = UUID();
+        INSERT INTO carts (id, user_id) VALUES (cart_id, p_user_id);
+    END IF;
+    
+    SELECT cart_id as id, p_user_id as user_id;
+END //
+DELIMITER ;
+
+-- Agregar item al carrito
+DELIMITER //
+CREATE PROCEDURE AddToCart(
+    IN p_user_id VARCHAR(36),
+    IN p_product_id VARCHAR(36),
+    IN p_quantity INT,
+    IN p_price DECIMAL(10,2),
+    IN p_product_name VARCHAR(255)
+)
+BEGIN
+    DECLARE cart_id VARCHAR(36);
+    DECLARE existing_quantity INT DEFAULT 0;
+    DECLARE new_item_id VARCHAR(36);
+    
+    -- Obtener o crear carrito
+    CALL GetOrCreateCart(p_user_id);
+    SELECT id INTO cart_id FROM carts WHERE user_id = p_user_id;
+    
+    -- Verificar si el producto ya está en el carrito
+    SELECT quantity INTO existing_quantity 
+    FROM cart_items 
+    WHERE cart_id = cart_id AND product_id = p_product_id;
+    
+    IF existing_quantity > 0 THEN
+        -- Actualizar cantidad existente
+        UPDATE cart_items 
+        SET quantity = quantity + p_quantity 
+        WHERE cart_id = cart_id AND product_id = p_product_id;
+        
+        SELECT 'Cantidad actualizada en el carrito' as message;
+    ELSE
+        -- Insertar nuevo item
+        SET new_item_id = UUID();
+        INSERT INTO cart_items (id, cart_id, product_id, quantity, price, product_name)
+        VALUES (new_item_id, cart_id, p_product_id, p_quantity, p_price, p_product_name);
+        
+        SELECT new_item_id as item_id, 'Producto agregado al carrito' as message;
+    END IF;
+END //
+DELIMITER ;
+
+-- Obtener carrito con totales
+DELIMITER //
+CREATE PROCEDURE GetCartWithTotal(IN p_user_id VARCHAR(36))
+BEGIN
+    DECLARE cart_id VARCHAR(36);
+    
+    SELECT id INTO cart_id FROM carts WHERE user_id = p_user_id;
+    
+    IF cart_id IS NOT NULL THEN
+        -- Items del carrito
+        SELECT 
+            ci.id,
+            ci.product_id,
+            ci.product_name,
+            ci.quantity,
+            ci.price,
+            (ci.quantity * ci.price) as line_total
+        FROM cart_items ci
+        WHERE ci.cart_id = cart_id;
+        
+        -- Total del carrito
+        SELECT 
+            cart_id,
+            COUNT(*) as total_items,
+            SUM(quantity * price) as total_amount
+        FROM cart_items 
+        WHERE cart_id = cart_id;
+    END IF;
+END //
+DELIMITER ;
+
+-- Eliminar item del carrito
+DELIMITER //
+CREATE PROCEDURE RemoveFromCart(IN p_user_id VARCHAR(36), IN p_product_id VARCHAR(36))
+BEGIN
+    DECLARE cart_id VARCHAR(36);
+    
+    SELECT id INTO cart_id FROM carts WHERE user_id = p_user_id;
+    
+    IF cart_id IS NOT NULL THEN
+        DELETE FROM cart_items 
+        WHERE cart_id = cart_id AND product_id = p_product_id;
+        
+        SELECT 'Producto eliminado del carrito' as message;
+    END IF;
+END //
+DELIMITER ;
+
+-- Limpiar carrito
+DELIMITER //
+CREATE PROCEDURE ClearCart(IN p_user_id VARCHAR(36))
+BEGIN
+    DECLARE cart_id VARCHAR(36);
+    
+    SELECT id INTO cart_id FROM carts WHERE user_id = p_user_id;
+    
+    IF cart_id IS NOT NULL THEN
+        DELETE FROM cart_items WHERE cart_id = cart_id;
+        SELECT 'Carrito limpiado' as message;
+    END IF;
+END //
+DELIMITER ;
+
+-- =====================================================
+-- 4. ORDER SERVICE DATABASE
+-- =====================================================
+CREATE DATABASE order_service;
+USE order_service;
+
+CREATE TABLE orders (
+    id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
+    user_id VARCHAR(36) NOT NULL,
+    total DECIMAL(10,2) NOT NULL,
+    status ENUM('pending', 'paid', 'shipped', 'delivered', 'cancelled') DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE order_items (
+    id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
+    order_id VARCHAR(36) NOT NULL,
+    product_id VARCHAR(36) NOT NULL,
+    product_name VARCHAR(255), -- denormalizado
+    quantity INT NOT NULL,
+    price DECIMAL(10,2) NOT NULL,
+    FOREIGN KEY (order_id) REFERENCES orders(id)
+);
+
+CREATE TABLE payments (
+    id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
+    order_id VARCHAR(36) NOT NULL,
+    amount DECIMAL(10,2) NOT NULL,
+    status ENUM('pending', 'completed', 'failed') DEFAULT 'pending',
+    payment_method VARCHAR(50),
+    transaction_id VARCHAR(100), -- ID de transacción externa
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (order_id) REFERENCES orders(id)
+);
+
+-- PROCEDIMIENTOS PARA ORDER SERVICE
+
+-- Crear orden completa
+DELIMITER //
+CREATE PROCEDURE CreateOrder(
+    IN p_user_id VARCHAR(36),
+    IN p_total DECIMAL(10,2)
+)
+BEGIN
+    DECLARE order_id VARCHAR(36);
+    SET order_id = UUID();
+    
+    INSERT INTO orders (id, user_id, total, status)
+    VALUES (order_id, p_user_id, p_total, 'pending');
+    
+    SELECT order_id as id, 'Orden creada exitosamente' as message;
+END //
+DELIMITER ;
+
+-- Agregar item a orden
+DELIMITER //
+CREATE PROCEDURE AddOrderItem(
+    IN p_order_id VARCHAR(36),
+    IN p_product_id VARCHAR(36),
+    IN p_product_name VARCHAR(255),
+    IN p_quantity INT,
+    IN p_price DECIMAL(10,2)
+)
+BEGIN
+    DECLARE item_id VARCHAR(36);
+    SET item_id = UUID();
+    
+    INSERT INTO order_items (id, order_id, product_id, product_name, quantity, price)
+    VALUES (item_id, p_order_id, p_product_id, p_product_name, p_quantity, p_price);
+    
+    SELECT item_id, 'Item agregado a la orden' as message;
+END //
+DELIMITER ;
+
+-- Procesar pago
+DELIMITER //
+CREATE PROCEDURE ProcessPayment(
+    IN p_order_id VARCHAR(36),
+    IN p_amount DECIMAL(10,2),
+    IN p_payment_method VARCHAR(50),
+    IN p_transaction_id VARCHAR(100)
+)
+BEGIN
+    DECLARE payment_id VARCHAR(36);
+    SET payment_id = UUID();
+    
+    INSERT INTO payments (id, order_id, amount, payment_method, transaction_id, status)
+    VALUES (payment_id, p_order_id, p_amount, p_payment_method, p_transaction_id, 'completed');
+    
+    -- Actualizar estado de la orden
+    UPDATE orders SET status = 'paid' WHERE id = p_order_id;
+    
+    SELECT payment_id, 'Pago procesado exitosamente' as message;
+END //
+DELIMITER ;
+
+-- Obtener historial de órdenes del usuario
+DELIMITER //
+CREATE PROCEDURE GetUserOrders(IN p_user_id VARCHAR(36))
+BEGIN
+    SELECT 
+        o.id,
+        o.total,
+        o.status,
+        o.created_at,
+        p.payment_method,
+        p.status as payment_status
+    FROM orders o
+    LEFT JOIN payments p ON o.id = p.order_id
+    WHERE o.user_id = p_user_id
+    ORDER BY o.created_at DESC;
+END //
+DELIMITER ;
+
+-- Obtener detalle completo de orden
+DELIMITER //
+CREATE PROCEDURE GetOrderDetail(IN p_order_id VARCHAR(36))
+BEGIN
+    -- Información de la orden
+    SELECT id, user_id, total, status, created_at
+    FROM orders 
+    WHERE id = p_order_id;
+    
+    -- Items de la orden
+    SELECT id, product_id, product_name, quantity, price, (quantity * price) as line_total
+    FROM order_items 
+    WHERE order_id = p_order_id;
+    
+    -- Información del pago
+    SELECT id, payment_method, status, amount, transaction_id, created_at
+    FROM payments 
+    WHERE order_id = p_order_id;
+END //
+DELIMITER ;
+
+-- Cambiar estado de orden
+DELIMITER //
+CREATE PROCEDURE UpdateOrderStatus(
+    IN p_order_id VARCHAR(36),
+    IN p_new_status VARCHAR(20)
+)
+BEGIN
+    UPDATE orders 
+    SET status = p_new_status 
+    WHERE id = p_order_id;
+    
+    SELECT 'Estado actualizado exitosamente' as message;
+END //
+DELIMITER ;
+
+-- Cancelar orden
+DELIMITER //
+CREATE PROCEDURE CancelOrder(IN p_order_id VARCHAR(36))
+BEGIN
+    UPDATE orders 
+    SET status = 'cancelled' 
+    WHERE id = p_order_id;
+    
+    UPDATE payments 
+    SET status = 'failed' 
+    WHERE order_id = p_order_id AND status = 'pending';
+    
+    SELECT 'Orden cancelada exitosamente' as message;
+END //
+DELIMITER ;
+
+-- =====================================================
+-- DATOS DE EJEMPLO CON UUID
+-- =====================================================
+
+-- Usuarios
+USE user_service;
+SET @user1_id = UUID();
+SET @user2_id = UUID();
+
+INSERT INTO users (id, email, password, first_name, last_name, phone) VALUES
+(@user1_id, 'juan@email.com', 'hash123', 'Juan', 'Pérez', '961-123-4567'),
+(@user2_id, 'maria@email.com', 'hash456', 'María', 'López', '961-234-5678');
+
+INSERT INTO user_addresses (user_id, street, city, state, postal_code) VALUES
+(@user1_id, 'Av. Central 123', 'Tuxtla Gutiérrez', 'Chiapas', '29000'),
+(@user2_id, 'Calle 5 de Mayo 456', 'San Cristóbal', 'Chiapas', '29200');
+
+-- Productos
+USE product_service;
+SET @cat1_id = UUID();
+SET @cat2_id = UUID();
+
+INSERT INTO categories (id, name, description) VALUES
+(@cat1_id, 'Electrónicos', 'Dispositivos electrónicos'),
+(@cat2_id, 'Ropa', 'Vestimenta y accesorios');
+
+SET @prod1_id = UUID();
+SET @prod2_id = UUID();
+SET @prod3_id = UUID();
+SET @prod4_id = UUID();
+
+INSERT INTO products (id, name, description, price, category_id, stock) VALUES
+(@prod1_id, 'iPhone 14', 'Smartphone Apple', 19999.00, @cat1_id, 10),
+(@prod2_id, 'Samsung Galaxy', 'Smartphone Samsung', 15999.00, @cat1_id, 15),
+(@prod3_id, 'Playera Básica', 'Playera de algodón', 299.00, @cat2_id, 50),
+(@prod4_id, 'Jeans', 'Pantalón de mezclilla', 899.00, @cat2_id, 25);
+
+-- Carrito de ejemplo
+USE cart_service;
+SET @cart1_id = UUID();
+
+INSERT INTO carts (id, user_id) VALUES (@cart1_id, @user1_id);
+INSERT INTO cart_items (cart_id, product_id, quantity, price, product_name) VALUES
+(@cart1_id, @prod1_id, 1, 19999.00, 'iPhone 14'),
+(@cart1_id, @prod3_id, 2, 299.00, 'Playera Básica');
+
+-- Orden de ejemplo
+USE order_service;
+SET @order1_id = UUID();
+
+INSERT INTO orders (id, user_id, total, status) VALUES (@order1_id, @user1_id, 20597.00, 'pending');
+INSERT INTO order_items (order_id, product_id, product_name, quantity, price) VALUES
+(@order1_id, @prod1_id, 'iPhone 14', 1, 19999.00),
+(@order1_id, @prod3_id, 'Playera Básica', 2, 299.00);
+INSERT INTO payments (order_id, amount, status, payment_method, transaction_id) VALUES
+(@order1_id, 20597.00, 'pending', 'credit_card', 'TXN_12345');
+
+-- =====================================================
+-- EJEMPLOS DE USO CON UUID
+-- =====================================================
+
+/*
+-- EJEMPLOS DE LLAMADAS A LOS PROCEDIMIENTOS CON UUID:
+
+-- User Service
+CALL RegisterUser('nuevo@email.com', 'hash789', 'Ana', 'García', '961-555-0123');
+CALL AuthenticateUser('juan@email.com', 'hash123');
+CALL GetUserProfile('550e8400-e29b-41d4-a716-446655440000');
+
+-- Product Service  
+CALL SearchProducts('iPhone', NULL, 10, 0);
+CALL GetProductById('550e8400-e29b-41d4-a716-446655440001');
+CALL ReserveStock('550e8400-e29b-41d4-a716-446655440001', 2);
+
+-- Cart Service
+CALL AddToCart('550e8400-e29b-41d4-a716-446655440000', '550e8400-e29b-41d4-a716-446655440001', 1, 15999.00, 'Samsung Galaxy');
+CALL GetCartWithTotal('550e8400-e29b-41d4-a716-446655440000');
+CALL RemoveFromCart('550e8400-e29b-41d4-a716-446655440000', '550e8400-e29b-41d4-a716-446655440001');
+
+-- Order Service
+CALL CreateOrder('550e8400-e29b-41d4-a716-446655440000', 20597.00);
+CALL ProcessPayment('550e8400-e29b-41d4-a716-446655440002', 20597.00, 'credit_card', 'TXN_67890');
+CALL GetUserOrders('550e8400-e29b-41d4-a716-446655440000');
+*/
