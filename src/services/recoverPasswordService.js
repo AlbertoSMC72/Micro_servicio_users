@@ -1,5 +1,7 @@
 import { transporter } from '../config/emailConfig.js';
 import { generateResetToken, getTokenExpiration } from '../config/utils.js';
+import { getUsuarioAuth } from '../repository/users.repocitories.js';
+import config from '../config/config.js';
 
 export const recoverPasswordService = async (email) => {
     try {

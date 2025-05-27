@@ -11,16 +11,16 @@ export const getUsuarios = () =>
 
 export const getUsuario = (identifier) =>
     new Promise((resolve, reject) => {
-        let consulta;
-        if (identifier.includes('@')) {
-            consulta = "SELECT id, email, first_name, last_name, phone, created_at FROM users WHERE email = ?";
-        } else {
-            consulta = "SELECT id, email, first_name, last_name, phone, created_at FROM users WHERE id = ?";
-        }
-        
+        const consulta = "SELECT * FROM user_service.users where email = ?";
         config
             .execute(consulta, [identifier])
-            .then((resultados) => resolve(resultados))
+            .then((resultados) => {
+                if (resultados.length > 0) {
+                    resolve(resultados[0]);
+                } else {
+                    reject({ message: "Usuario no encontrado" });
+                }
+            })
             .catch((error) => reject(error));
     });
 

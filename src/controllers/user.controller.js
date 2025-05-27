@@ -11,6 +11,7 @@ import {
 import {resetPasswordService} from '../services/resetPasswordService.js';
 import { recoverPasswordService } from '../services/recoverPasswordService.js';
 
+
 export const getUsuariosController = async (req, res) => {
     try {
         const usuarios = await getUsuariosService();
@@ -197,7 +198,7 @@ export const recoverPasswordController = async (req, res) => {
             });
         }
 
-        const resultado = await recoverPasswordService(email);
+        await recoverPasswordService(email);
         
         res.status(200).json({
             success: true,

@@ -41,17 +41,17 @@ export const getUsuarioService = async (identifier) => {
 export const postUsuarioService = async (usuario) => {
     try {
         const validarUsuario = validacionUsuario(usuario);
-        
         if (!validarUsuario.success) {
             throw new Error(`Datos inválidos: ${validarUsuario.error.issues.map(i => i.message).join(', ')}`);
         }
 
         let { email, password, first_name, last_name, phone } = usuario;
         
-        // Verificar si el usuario ya existe
         try {
             await getUsuario(email);
-            throw new Error('El email ya está registrado');
+            if (usuario[0] && usuario[0].length > 0) {
+                throw new Error('El usuario ya está registrado');
+            }
         } catch (error) {
             if (!error.message.includes('no encontrado')) {
                 throw error;

@@ -1,17 +1,20 @@
 import bcrypt from 'bcrypt';
+import config from '../config/config.js';
 
 export const validateResetToken = (token) => {
     return new Promise((resolve, reject) => {
+        // Obtener la fecha y hora actual del servidor
+        const serverNow = new Date()
         const consulta = `
             SELECT prt.*, u.email, u.first_name 
             FROM password_reset_tokens prt
             JOIN users u ON prt.user_id = u.id
             WHERE prt.token = ? 
-            AND prt.expires_at > NOW() 
+            AND prt.expires_at > ?
             AND prt.used = FALSE
         `;
         config
-            .execute(consulta, [token])
+            .execute(consulta, [token, serverNow])
             .then((resultados) => resolve(resultados))
             .catch((error) => reject(error));
     });

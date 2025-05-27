@@ -1,9 +1,9 @@
 import { Router } from "express";
 import usersRouter from "./user.route.js"
 
-const router = Router();
+const routerIndex = Router();
 const prefijo = "app";
 
-router.use(`/${prefijo}/user`, usersRouter);
+routerIndex.use(`/${prefijo}/user`, usersRouter);
 
-export default usersRouter;
+export default routerIndex;
