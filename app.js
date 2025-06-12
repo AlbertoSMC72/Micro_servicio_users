@@ -26,7 +26,7 @@ app.all('*', (req, res) => {
 });
 
 confing.connect().then(() => {
-    console.log("Base de datos conectada");
+    console.log("Base de datos conectada en qa");
     const httpServer = createServer(app);
     httpServer.listen(process.env.PORT, () => {
         console.log(`Servidor en ejecución en el puerto ${process.env.PORT}`);
