@@ -18,8 +18,8 @@ pipeline {
         EMAIL_USER = credentials('email-user')
         EMAIL_PASSWORD = credentials('email-password')
 
-        DEV_IP = '3.92.207.25'
-        QA_IP  = '35.172.215.16'
+        DEV_IP = '34.196.209.255'
+        QA_IP  = '34.230.141.77'
         PROD_IP = '107.21.162.242'
         REMOTE_PATH = '/home/ubuntu/Micro_servicio_users'
     }
