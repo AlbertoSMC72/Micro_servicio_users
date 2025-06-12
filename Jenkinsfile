@@ -28,7 +28,7 @@ pipeline {
         stage('Detect Branch') {
             steps {
                 script {
-                    env.ACTUAL_BRANCH = env.BRANCH_NAME ?: 'main'
+                    env.ACTUAL_BRANCH = env.GIT_BRANCH?.replaceFirst(/^origin\//, '') ?: 'master'
                     echo "🔍 Rama activa: ${env.ACTUAL_BRANCH}"
                 }
             }
